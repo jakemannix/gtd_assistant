@@ -1,0 +1,12 @@
+llama-index==0.10.51
+llama-index-embeddings-huggingface==0.2.2
+python-dotenv==1.0.1
+openai==1.35.9
+Pillow==10.4.0  # For image processing
+anthropic==0.30.1  # Anthropic's official SDK
+llama-index-multi-modal-llms-anthropic==0.1.4
+requests==2.32.3
+llama-index-llms-anthropic==0.1.15
+llama-index-embeddings-openai==0.1.10
+llama-index-embeddings-cohere==0.1.9
+beautifulsoup4
