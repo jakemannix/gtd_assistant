@@ -6,8 +6,7 @@ from typing import List, Dict
 import logging
 import os
 
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('gtd_assistant')
 
 
 class ObsidianVault:
@@ -57,10 +56,10 @@ class ObsidianVault:
         contents = []
         for item in os.listdir(full_path):
             item_path = os.path.join(full_path, item)
-            if os.path.isfile(item_path) and item.endswith('.md'):
-                contents.append(f"File: {item}")
-            elif os.path.isdir(item_path):
+            if os.path.isdir(item_path):
                 contents.append(f"Folder: {item}")
+            elif os.path.isfile(item_path):
+                contents.append(f"File: {item}")
 
         logger.debug(f"Contents found: {contents}")
         return contents

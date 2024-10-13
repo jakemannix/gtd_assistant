@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gtd_assistant"
+version = "0.1"
+description = "A GTD (Getting Things Done) assistant"
+authors = [{name = "Jake Mannix", email = "jake@yetanotheruseless.com"}]
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "llama-index==0.10.51",
+    "llama-index-embeddings-huggingface==0.2.2",
+    "python-dotenv==1.0.1",
+    "openai==1.35.9",
+    "Pillow==10.4.0",
+    "llama-index-multi-modal-llms-anthropic",
+    "requests==2.32.3",
+    "llama-index-llms-anthropic",
+    "llama-index-embeddings-openai",
+    "llama-index-embeddings-cohere",
+    "qdrant_client",
+    "llama-index-vector-stores-qdrant",
+    "llama-index-vector-stores-vespa",
+    "llama-index-storage-docstore-redis",
+    "llama-index-vector-stores-redis",
+    "llama-index-storage-index-store-redis",
+    "argilla-llama-index>=2.1.0",
+    "beautifulsoup4",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Add your development dependencies here, for example:
+    "pytest",
+    "docker",
+    "debugpy"
+]
+
+[tool.setuptools.packages.find]
+include = ["gtd_assistant*"]
+exclude = ["tests*"]
+
+[tool.setuptools]
+package-data = {"gtd_assistant" = ["py.typed"]}
