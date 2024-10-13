@@ -117,10 +117,11 @@ class DurableSemanticMemory(BaseMemory):
         self.cur_batch_textnode = None
 
     def put(self, message: ChatMessage) -> None:
-        current_time = datetime.now().timestamp()
-
+        # Use the timestamp from the message metadata if available
+        current_time = message.additional_kwargs.get('timestamp', datetime.now().timestamp())
+        
         if not self.batch_by_user_message or message.role in [MessageRole.USER, MessageRole.SYSTEM]:
-            self._commit_node()
+            self.flush()
             self.cur_batch_textnode = TextNode(
                 text="",
                 metadata={
@@ -130,10 +131,12 @@ class DurableSemanticMemory(BaseMemory):
                 }
             )
 
-        # Use Pydantic's json method for serialization
         serialized_message = json.loads(message.json())
-        serialized_message["timestamp"] = current_time
 
+        # Only set the timestamp if it's not already present
+        serialized_message["timestamp"] = serialized_message.get("timestamp", current_time)
+
+        # Handle potential list content (unlikely but kept for consistency)
         if isinstance(serialized_message["content"], list):
             serialized_message["content"] = " ".join(
                 item.get('text', '') 
@@ -145,34 +148,31 @@ class DurableSemanticMemory(BaseMemory):
         self.cur_batch_textnode.metadata["sub_dicts"].append(serialized_message)
         self.cur_batch_textnode.metadata["timestamp"] = current_time
 
-    def _commit_node(self) -> None:
-        if self.cur_batch_textnode and self.cur_batch_textnode.text:
-            # For vector index, ensure sub_dicts is a string
-            vector_node = self.cur_batch_textnode.copy()
-            vector_node.metadata["sub_dicts"] = json.dumps(vector_node.metadata["sub_dicts"])
-            self.vector_index.insert_nodes([vector_node])
-            
-            # Add the original entry to the doc store
-            self.doc_store.add_entry(self.cur_batch_textnode)
-            
-            self.cur_batch_textnode = None
-
     def get_all(self) -> List[ChatMessage]:
+        self.flush()
         current_time = datetime.now().timestamp()
         oldest_allowed_time = current_time - self.max_memory_age.total_seconds()
+        logger.debug(f"Current time: {current_time}, Oldest allowed time: {oldest_allowed_time}")
         
         nodes = self.doc_store.get_recent_entries(current_time, self.max_recent_memories)
         logger.info(f"Retrieved {len(nodes)} nodes from doc store")
         
         chat_messages = []
         for node in nodes:
+            logger.debug(f"Node timestamp: {node.metadata['timestamp']}")
             if node.metadata['timestamp'] >= oldest_allowed_time:
-                # Parse the JSON string of sub_dicts
                 sub_dicts = json.loads(node.metadata['sub_dicts'])
                 logger.debug(f"Parsed sub_dicts: {sub_dicts}")
                 
                 for sub_dict in sub_dicts:
+                    # Parse the ChatMessage
                     chat_message = ChatMessage.parse_obj(sub_dict)
+                    extra_data = {
+                        k: v
+                        for k, v in sub_dict.items()
+                        if k not in {'role', 'content', 'additional_kwargs'} and not isinstance(v, ChatMessage)
+                    }
+                    chat_message.additional_kwargs.update(extra_data)
                     chat_messages.append(chat_message)
         
         logger.debug(f"Retrieved chat messages: {[msg.dict() for msg in chat_messages]}")
@@ -190,8 +190,18 @@ class DurableSemanticMemory(BaseMemory):
     def reset(self) -> None:
         self.vector_store.clear()
 
-    def flush(self) -> None:
-        self._commit_node()
+    def flush(self) -> None:        
+        if self.cur_batch_textnode and self.cur_batch_textnode.text:
+            # For vector index, ensure sub_dicts is a string
+            vector_node = self.cur_batch_textnode.copy()
+            vector_node.metadata["sub_dicts"] = json.dumps(vector_node.metadata["sub_dicts"])
+            self.vector_index.insert_nodes([vector_node])
+            
+            # Add the original entry to the doc store
+            self.doc_store.add_entry(self.cur_batch_textnode)
+            
+            self.cur_batch_textnode = None
+
 
     @classmethod
     def from_defaults(

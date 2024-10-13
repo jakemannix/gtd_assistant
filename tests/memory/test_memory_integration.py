@@ -156,14 +156,14 @@ def test_durable_semantic_memory(redis_client):
     # Add messages
     now = datetime.now().timestamp()
     messages = [
-        ChatMessage(role=MessageRole.USER, content="Hello", metadata={"timestamp": now - 3600}),
-        ChatMessage(role=MessageRole.ASSISTANT, content="Hi there!", metadata={"timestamp": now - 3500}),
-        ChatMessage(role=MessageRole.USER, content="How are you?", metadata={"timestamp": now - 3400}),
-        ChatMessage(role=MessageRole.ASSISTANT, content="I'm doing well, thanks!", metadata={"timestamp": now - 3300}),
-        ChatMessage(role=MessageRole.USER, content="What's the weather like?", metadata={"timestamp": now - 3200}),
-        ChatMessage(role=MessageRole.ASSISTANT, content="It's sunny and warm.", metadata={"timestamp": now - 3100}),
-        ChatMessage(role=MessageRole.USER, content="Great, thanks!", metadata={"timestamp": now - 3000}),
-        ChatMessage(role=MessageRole.ASSISTANT, content="You're welcome!", metadata={"timestamp": now - 2900}),
+        ChatMessage(role=MessageRole.USER, content="Hello", additional_kwargs={"timestamp": now - 3600}),
+        ChatMessage(role=MessageRole.ASSISTANT, content="Hi there!", additional_kwargs={"timestamp": now - 3500}),
+        ChatMessage(role=MessageRole.USER, content="How are you?", additional_kwargs={"timestamp": now - 3400}),
+        ChatMessage(role=MessageRole.ASSISTANT, content="I'm doing well, thanks!", additional_kwargs={"timestamp": now - 3300}),
+        ChatMessage(role=MessageRole.USER, content="What's the weather like?", additional_kwargs={"timestamp": now - 3200}),
+        ChatMessage(role=MessageRole.ASSISTANT, content="It's sunny and warm.", additional_kwargs={"timestamp": now - 3100}),
+        ChatMessage(role=MessageRole.USER, content="Great, thanks!", additional_kwargs={"timestamp": now - 3000}),
+        ChatMessage(role=MessageRole.ASSISTANT, content="You're welcome!", additional_kwargs={"timestamp": now - 2900}),
     ]
 
     for msg in messages:
