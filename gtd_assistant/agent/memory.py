@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import json
 import base64
 from enum import Enum
-from pydantic import Field, parse_raw_as
+from pydantic import Field
 from redis import Redis
 
 from llama_index.core.memory import BaseMemory
@@ -118,7 +118,7 @@ class DurableSemanticMemory(BaseMemory):
 
     def put(self, message: ChatMessage) -> None:
         current_time = datetime.now().timestamp()
-        
+
         if not self.batch_by_user_message or message.role in [MessageRole.USER, MessageRole.SYSTEM]:
             self._commit_node()
             self.cur_batch_textnode = TextNode(
@@ -130,14 +130,31 @@ class DurableSemanticMemory(BaseMemory):
                 }
             )
 
-        # Use Pydantic's json() method to serialize the ChatMessage
-        self.cur_batch_textnode.metadata["sub_dicts"].append(message.json())
-        self.cur_batch_textnode.text += f"{message.role}: {message.content}\n"
+        # Use Pydantic's json method for serialization
+        serialized_message = json.loads(message.json())
+        serialized_message["timestamp"] = current_time
+
+        if isinstance(serialized_message["content"], list):
+            serialized_message["content"] = " ".join(
+                item.get('text', '') 
+                for item in serialized_message["content"] 
+                if isinstance(item, dict) and 'text' in item
+            )
+
+        self.cur_batch_textnode.text += f"{message.role}: {serialized_message['content']}\n"
+        self.cur_batch_textnode.metadata["sub_dicts"].append(serialized_message)
+        self.cur_batch_textnode.metadata["timestamp"] = current_time
 
     def _commit_node(self) -> None:
         if self.cur_batch_textnode and self.cur_batch_textnode.text:
-            # No need to manually serialize sub_dicts, as it's already a list of JSON strings
+            # For vector index, ensure sub_dicts is a string
+            vector_node = self.cur_batch_textnode.copy()
+            vector_node.metadata["sub_dicts"] = json.dumps(vector_node.metadata["sub_dicts"])
+            self.vector_index.insert_nodes([vector_node])
+            
+            # Add the original entry to the doc store
             self.doc_store.add_entry(self.cur_batch_textnode)
+            
             self.cur_batch_textnode = None
 
     def get_all(self) -> List[ChatMessage]:
@@ -150,9 +167,12 @@ class DurableSemanticMemory(BaseMemory):
         chat_messages = []
         for node in nodes:
             if node.metadata['timestamp'] >= oldest_allowed_time:
-                for sub_dict in node.metadata['sub_dicts']:
-                    # Use Pydantic's parse_raw_as to deserialize the ChatMessage
-                    chat_message = parse_raw_as(ChatMessage, sub_dict)
+                # Parse the JSON string of sub_dicts
+                sub_dicts = json.loads(node.metadata['sub_dicts'])
+                logger.debug(f"Parsed sub_dicts: {sub_dicts}")
+                
+                for sub_dict in sub_dicts:
+                    chat_message = ChatMessage.parse_obj(sub_dict)
                     chat_messages.append(chat_message)
         
         logger.debug(f"Retrieved chat messages: {[msg.dict() for msg in chat_messages]}")
