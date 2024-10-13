@@ -7,3 +7,4 @@ persisted_index/
 .vscode/
 *.egg-info/
 **/__pycache__/*
+**/__pycache__/

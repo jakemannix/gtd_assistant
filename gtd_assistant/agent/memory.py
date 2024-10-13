@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import json
 import base64
 from enum import Enum
-from pydantic import Field, parse_raw_as
+from pydantic import Field
 from redis import Redis
 
 from llama_index.core.memory import BaseMemory
@@ -73,11 +73,7 @@ class SortedDocStore:
     def get_recent_entries(self, max_datestamp: float, limit: int = 10) -> List[TextNode]:
         entries = self.redis_sorted_store.get_sorted_entries(max_datestamp, limit)
         logger.debug(f"Retrieved entries from SortedDocStore: {entries}")
-        nodes = []
-        for entry in entries:
-            # No need to manually deserialize sub_dicts
-            nodes.append(TextNode.parse_obj(entry))
-        return nodes
+        return [TextNode.parse_obj(entry) for entry in entries]
 
     def delete_old_entries(self, oldest_allowed_timestamp: float):
         self.redis_sorted_store.delete_old_entries(oldest_allowed_timestamp)
@@ -116,10 +112,28 @@ class DurableSemanticMemory(BaseMemory):
         self.batch_by_user_message = True
         self.cur_batch_textnode = None
 
+    def _stringify_chat_message(self, msg: ChatMessage) -> Dict:
+        msg_dict = msg.dict()
+        msg_dict["additional_kwargs"] = json.dumps(msg_dict["additional_kwargs"])
+        
+        if isinstance(msg_dict["content"], list):
+            msg_dict["content"] = " ".join(
+                item.get('text', '') 
+                for item in msg_dict["content"] 
+                if isinstance(item, dict) and 'text' in item
+            )
+        elif not isinstance(msg_dict["content"], str):
+            msg_dict["content"] = str(msg_dict["content"])
+        
+        return msg_dict
+
     def put(self, message: ChatMessage) -> None:
         current_time = datetime.now().timestamp()
-        
-        if not self.batch_by_user_message or message.role in [MessageRole.USER, MessageRole.SYSTEM]:
+
+        if not self.batch_by_user_message or message.role in [
+            MessageRole.USER,
+            MessageRole.SYSTEM,
+        ]:
             self._commit_node()
             self.cur_batch_textnode = TextNode(
                 text="",
@@ -130,14 +144,24 @@ class DurableSemanticMemory(BaseMemory):
                 }
             )
 
-        # Use Pydantic's json() method to serialize the ChatMessage
-        self.cur_batch_textnode.metadata["sub_dicts"].append(message.json())
-        self.cur_batch_textnode.text += f"{message.role}: {message.content}\n"
+        sub_dict = self._stringify_chat_message(message)
+        content = sub_dict["content"]
+
+        self.cur_batch_textnode.text += message.role + ": " + content + "\n"
+
+        sub_dict["timestamp"] = current_time
+        self.cur_batch_textnode.metadata["sub_dicts"].append(sub_dict)
+        self.cur_batch_textnode.metadata["timestamp"] = current_time
 
     def _commit_node(self) -> None:
         if self.cur_batch_textnode and self.cur_batch_textnode.text:
-            # No need to manually serialize sub_dicts, as it's already a list of JSON strings
+            # Insert the node into the vector index
+            self.vector_index.insert_nodes([self.cur_batch_textnode])
+            
+            # Add the entry to the doc store
             self.doc_store.add_entry(self.cur_batch_textnode)
+            
+            # Reset the current batch text node
             self.cur_batch_textnode = None
 
     def get_all(self) -> List[ChatMessage]:
@@ -146,16 +170,40 @@ class DurableSemanticMemory(BaseMemory):
         
         nodes = self.doc_store.get_recent_entries(current_time, self.max_recent_memories)
         logger.info(f"Retrieved {len(nodes)} nodes from doc store")
+        logger.debug(f"Nodes: {nodes}")
         
         chat_messages = []
         for node in nodes:
+            # Check if the node itself is within the allowed time range
             if node.metadata['timestamp'] >= oldest_allowed_time:
-                for sub_dict in node.metadata['sub_dicts']:
-                    # Use Pydantic's parse_raw_as to deserialize the ChatMessage
-                    chat_message = parse_raw_as(ChatMessage, sub_dict)
+                sub_dicts = node.metadata['sub_dicts']
+                logger.debug(f"Processing sub_dicts: {sub_dicts}")
+                for sub_dict in sub_dicts:
+                    # Prepare data for ChatMessage
+                    message_data = {
+                        'role': MessageRole(sub_dict['role']),
+                        'content': sub_dict['content'],
+                        'additional_kwargs': {}
+                    }
+                    
+                    # Add timestamp to additional_kwargs if present
+                    if 'timestamp' in sub_dict:
+                        message_data['additional_kwargs']['timestamp'] = float(sub_dict['timestamp'])
+                    
+                    # Add any other fields to additional_kwargs
+                    for key, value in sub_dict.items():
+                        if key not in ['role', 'content', 'additional_kwargs']:
+                            message_data['additional_kwargs'][key] = value
+                    
+                    # If there was an original additional_kwargs, merge it
+                    if 'additional_kwargs' in sub_dict:
+                        original_kwargs = json.loads(sub_dict['additional_kwargs']) if isinstance(sub_dict['additional_kwargs'], str) else sub_dict['additional_kwargs']
+                        message_data['additional_kwargs'].update(original_kwargs)
+                    
+                    chat_message = ChatMessage(**message_data)
                     chat_messages.append(chat_message)
         
-        logger.debug(f"Retrieved chat messages: {[msg.dict() for msg in chat_messages]}")
+        logger.debug(f"Retrieved chat messages: {json.dumps([msg.dict() for msg in chat_messages], indent=2)}")
         return chat_messages
 
     def get(self, input: Optional[str] = None, **kwargs: Any) -> List[ChatMessage]:
