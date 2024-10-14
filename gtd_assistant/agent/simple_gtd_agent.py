@@ -13,14 +13,13 @@ from llama_index.core.tools import FunctionTool
 from llama_index.core.agent.react_multimodal.step import MultimodalReActAgentWorker
 from llama_index.core.agent.react.formatter import ReActChatFormatter
 from llama_index.core.schema import ImageDocument
-from llama_index.vector_stores.qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
-
+from redis import Redis
+from datetime import timedelta
 from ..actions.gtd_tools import GTDTools
 from ..search.rag_system import RAGSystem
+from .memory import DurableSemanticMemory
 from .constants import GTD_PROMPT
-from .memory import SafeVectorMemory
+
 
 logger = logging.getLogger('gtd_assistant')
 
@@ -29,7 +28,7 @@ class SimpleGTDAgent:
         "gpt-4o": OpenAIMultiModal,
         "claude-3.5-sonnet": AnthropicMultiModal,
     }
-    def __init__(self, vault_path: str, persist_dir: str, 
+    def __init__(self, vault_path: str, persist_dir: str, redis_url: str,
                  model: str = "gpt-4o", embed_model: str = "local",
                  debug: bool = False):
         if model not in self.MODEL_CLIENTS:
@@ -40,43 +39,23 @@ class SimpleGTDAgent:
         self.debug = debug
         self.embed_model_name = embed_model
         self.mm_llm = self.MODEL_CLIENTS[model](model=model, max_new_tokens=1000)
+        self.memory = self.setup_memory(redis_url)
         self.tools = GTDTools(vault_path=vault_path, embed_model=self.embed_model_name, 
-                              llm_model=self.model, persist_dir=persist_dir).get_tools()
-        self.memory = self.setup_memory()
+                              llm_model=self.model, persist_dir=persist_dir,
+                             memory=self.memory).get_tools()
         self.agent = self.setup_agent()
 
-    def setup_memory(self):
-        # FIXME: we're not getting any memory on restarts of the agent.
+    def setup_memory(self, redis_url: str):
         embed_model = RAGSystem.get_embed_model(self.embed_model_name)
-        embed_model
-        # Create a Qdrant client (local)
-        # TODO: this assumes the qdrant server is running locally already
-        qdrant_client = QdrantClient(url=f"http://localhost:6333")
-        logger.info(f"Qdrant client created")        
-        if not qdrant_client.collection_exists(collection_name="gtd_memory"):
-            qdrant_client.create_collection(
-                collection_name="gtd_memory",
-                # TODO: this should be dynamic based on the embed model
-                vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
-            )
-        collections_str = '\n'.join([str(c) for c in qdrant_client.get_collections()])
-        logger.info(f"Qdrant collections:\n{collections_str}")
-        # Create a Qdrant vector store
-        vector_store = QdrantVectorStore(
-            client=qdrant_client,
-            collection_name="gtd_memory"
-        )
-
-        vector_memory = SafeVectorMemory.from_defaults(
-            vector_store=vector_store,
+        redis_client = Redis.from_url(redis_url)
+        vector_memory = DurableSemanticMemory(
+            redis_client=redis_client,
             embed_model=embed_model,
-            retriever_kwargs={"similarity_top_k": 5},
+            max_memory_age=timedelta(hours=1),
+            max_recent_memories=10,
+            batch_by_user_message=True,
         )
-        chat_memory = ChatMemoryBuffer.from_defaults(token_limit=1500)
-        return SimpleComposableMemory.from_defaults(
-            primary_memory=chat_memory,
-            secondary_memory_sources=[vector_memory],
-        )
+        return vector_memory
 
     def setup_agent(self):
         if self.debug:

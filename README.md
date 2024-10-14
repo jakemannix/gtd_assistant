@@ -29,11 +29,25 @@ ANTHROPIC_API_KEY=your_anthropic_api_key_here
 ```commandline
 VAULT_PATH=/path/to/your/obsidian/vault
 ```
-6. Run the GTD Assistant:
+6. Set up a local Redis Docker instance with persistent storage:
 ```commandline
-python -m gtd_assistant.app.main
+mkdir -p ~/redis-data
+docker run -d --name gtd-redis -p 6379:6379 -p 8001:8001 -v ~/redis-data:/data redis/redis-stack:latest
 ```
-7. Start interacting with your GTD Assistant! Try commands like:
+
+   This command creates a directory for Redis data, then starts a Redis Stack container with persistence enabled.
+   The Redis Stack image includes additional modules and tools, such as RedisInsight, which is accessible on port 8001.
+   
+   Alternatively, if you prefer to use an existing Redis instance, add the following to your `.env` file:
+```commandline
+REDIS_URL=redis://your-redis-host:6379
+```
+
+7. Run the GTD Assistant:
+```commandline
+python -m gtd_assistant.main
+```
+8. Start interacting with your GTD Assistant! Try commands like:
 ```commandline
 (GTD) List all notes in my Projects folder
 (GTD) Create a new note titled "New Project Idea" in the Projects folder

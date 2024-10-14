@@ -13,11 +13,11 @@ class GTDAssistant(cmd.Cmd):
     intro = "Welcome to your GTD Assistant. Type 'help' or '?' to list commands."
     prompt = "(GTD) "
 
-    def __init__(self, vault_path: str, model: str, embed_model: str, persist_dir: str, debug: bool):
+    def __init__(self, vault_path: str, model: str, embed_model: str, persist_dir: str, debug: bool, redis_url: str):
         super().__init__()
         self.agent = SimpleGTDAgent(vault_path=vault_path, model=model, 
                                     embed_model=embed_model, persist_dir=persist_dir,
-                                    debug=debug)
+                                    debug=debug, redis_url=redis_url)
 
     def process_input(self, line):
         """Process input, handling special commands or passing to default."""
@@ -60,6 +60,6 @@ class GTDAssistant(cmd.Cmd):
     do_question = do_help
 
 
-def start_chat_interface(vault_path: str, model: str, embed_model: str, persist_dir: str, debug: bool):
+def start_chat_interface(vault_path: str, model: str, embed_model: str, persist_dir: str, debug: bool, redis_url: str):
     GTDAssistant(vault_path=vault_path, model=model, embed_model=embed_model, 
-                 persist_dir=persist_dir, debug=debug).cmdloop()
+                 persist_dir=persist_dir, debug=debug, redis_url=redis_url).cmdloop()

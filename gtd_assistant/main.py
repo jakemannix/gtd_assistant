@@ -54,7 +54,7 @@ def main():
     parser.add_argument("--model", help="Model to use")
     parser.add_argument("--embed_model", help="Embedding model to use")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    
+    parser.add_argument("--redis_url", help="Redis URL")
     args = parser.parse_args()
 
     # Use environment variables as defaults, override with command-line args if provided
@@ -63,6 +63,7 @@ def main():
     model = args.model or os.getenv("MODEL")
     embed_model = args.embed_model or os.getenv("EMBED_MODEL")
     debug = args.debug or os.getenv("DEBUG", "False").lower() in ("true", "1", "t")
+    redis_url = args.redis_url or os.getenv("REDIS_URL")
 
     if not vault_path or not persist_dir:
         logger.error("VAULT_PATH and RAG_PERSIST_DIR must be set in .env file or provided as command-line arguments")
@@ -73,7 +74,8 @@ def main():
         persist_dir=persist_dir,
         model=model,
         embed_model=embed_model,
-        debug=debug
+        debug=debug,
+        redis_url=redis_url
     )
 
 if __name__ == "__main__":

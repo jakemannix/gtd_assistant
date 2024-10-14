@@ -2,9 +2,11 @@
 
 from typing import List, Dict
 from llama_index.core.tools import FunctionTool
+from llama_index.core.base.llms.types import ChatMessage
 from ..file_system.obsidian_interface import ObsidianVault
 from ..search.rag_system import RAGSystem
 from ..analysis.spider import Spider
+from ..agent.memory import DurableSemanticMemory
 import logging
 import os
 import traceback
@@ -16,12 +18,24 @@ logger = logging.getLogger('gtd_assistant')
 # thus we need to expect exceptions, and return an error message, possibly also listing the contents of the directory
 # above the path that failed, to help the LLM understand the file system layout and self correct.
 class GTDTools:
-    def __init__(self, vault_path: str, embed_model: str, llm_model: str, persist_dir: str):
+    def __init__(self, vault_path: str, embed_model: str, llm_model: str, persist_dir: str,
+     memory: DurableSemanticMemory):
         self.vault = ObsidianVault(vault_path)
         self.rag = RAGSystem(vault_path=vault_path, persist_dir=persist_dir,
                              embed_model=embed_model, llm_model=llm_model)
         self.spider = Spider()
+        self.memory = memory
         # self.rag.ensure_index_is_up_to_date()
+
+    def search_memory(self, query: str) -> List[ChatMessage]:
+        """
+        Search long-term chat memory for information relevant to the query.
+        Args:
+            query (str): The query to search for.
+        Returns:
+            List[ChatMessage]: A list of ChatMessage's that are relevant to the query.
+        """
+        return self.memory.get(query)
 
     def get_folder_structure(self) -> Dict[str, List[str]]:
         """
@@ -150,4 +164,5 @@ class GTDTools:
             FunctionTool.from_defaults(fn=self.write_note, name="write_note"),
             FunctionTool.from_defaults(fn=self.move_note, name="move_note"),
             FunctionTool.from_defaults(fn=self.fetch_links_from_note, name="fetch_links_from_note"),
+            FunctionTool.from_defaults(fn=self.search_memory, name="search_memory"),
         ]
