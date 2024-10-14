@@ -7,12 +7,13 @@ from pydantic import Field
 from redis import Redis
 
 from llama_index.core.memory import BaseMemory
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.schema import TextNode
 from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.storage.index_store import SimpleIndexStore
 from llama_index.vector_stores.redis import RedisVectorStore
-from llama_index.core.vector_stores.simple import SimpleVectorStore
+from llama_index.vector_stores.redis.schema import RedisVectorStoreSchema, VECTOR_FIELD_NAME
 from llama_index.core.base.llms.types import MessageRole
 
 import logging
@@ -100,17 +101,38 @@ class DurableSemanticMemory(BaseMemory):
         self,
         redis_client: Redis,
         embed_model: Any,
+        embed_dim: Optional[int] = None,
         max_recent_memories: int = 100,
         max_memory_age: timedelta = timedelta(days=7),
         **kwargs: Any
     ):
         super().__init__()
-        self.vector_store = RedisVectorStore(redis_client=redis_client)
+        
+        embed = embed_model if embed_model else HuggingFaceEmbedding("BAAI/bge-small-en-v1.5")
+        
+        # default Redis schema, but overriding the embedding dimension
+        schema = RedisVectorStoreSchema()
+        schema.remove_field(VECTOR_FIELD_NAME)
+        schema.add_field({
+            "name": VECTOR_FIELD_NAME,
+            "type": "vector",
+            "attrs": {
+                # FIXME: submit PR to llama-index to add dim() to the API of `Embedding`
+                "dims": embed_dim if embed_dim else len(embed.get_query_embedding("test")),
+                "algorithm": "flat",
+                "distance_metric": "cosine",
+            }
+        })
+
+        self.vector_store = RedisVectorStore(redis_client=redis_client, schema=schema)
+        
         self.vector_index = VectorStoreIndex.from_vector_store(
             self.vector_store, 
-            embed_model=embed_model
+            embed_model=embed
         )
+        
         self.doc_store = SortedDocStore(redis_client)
+        self.retriever_kwargs = {}
         self.max_recent_memories = max_recent_memories
         self.max_memory_age = max_memory_age
         self.batch_by_user_message = True
@@ -178,16 +200,32 @@ class DurableSemanticMemory(BaseMemory):
         logger.debug(f"Retrieved chat messages: {[msg.dict() for msg in chat_messages]}")
         return chat_messages
 
-    def get(self, input: Optional[str] = None, **kwargs: Any) -> List[ChatMessage]:
-        # For now, this just returns all messages
-        # In the future, you might want to implement filtering based on the input
-        return self.get_all()
+    def get(
+        self, input: Optional[str] = None, initial_token_count: int = 0, **kwargs: Any
+    ) -> List[ChatMessage]:
+        """Get chat history."""
+        if input is None:
+            return []
+
+        # retrieve from index
+        retriever = self.vector_index.as_retriever(**self.retriever_kwargs)
+        nodes = retriever.retrieve(input or "")
+
+        logger.debug(f"Retrieved nodes: {nodes}")
+        # retrieve underlying messages
+        chat_messages = []
+        for node in nodes:
+            sub_dicts = json.loads(node.metadata["sub_dicts"])
+            for sub_dict in sub_dicts:
+                chat_messages.append(ChatMessage.parse_obj(sub_dict))
+        return chat_messages
 
     def set(self, messages: List[ChatMessage]) -> None:
         for message in messages:
             self.put(message)
 
     def reset(self) -> None:
+        # TODO: determine whether we need to clear the doc store and/or vector_index
         self.vector_store.clear()
 
     def flush(self) -> None:        
