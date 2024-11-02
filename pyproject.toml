@@ -26,6 +26,7 @@ dependencies = [
     "llama-index-llms-anthropic",
     "llama-index-embeddings-openai",
     "llama-index-embeddings-cohere",
+    "llama-index-postprocessor-colbert-rerank",
     "qdrant_client",
     "llama-index-vector-stores-qdrant",
     "llama-index-vector-stores-vespa",

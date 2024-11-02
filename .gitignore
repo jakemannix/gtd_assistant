@@ -1,6 +1,7 @@
 .env
 venv/
 venv311/
+venv*/
 main.log
 persisted_index**/
 .idea/

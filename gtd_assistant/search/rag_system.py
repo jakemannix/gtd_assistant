@@ -13,6 +13,7 @@ from llama_index.llms.openai import OpenAI
 from llama_index.llms.anthropic import Anthropic
 from llama_index.embeddings.cohere import CohereEmbedding
 from llama_index.core.schema import NodeWithScore
+from llama_index.postprocessor.colbert_rerank import ColbertRerank
 
 from .obsidian_reader import ObsidianReader
 
@@ -125,7 +126,8 @@ class RAGSystem:
         """Standard query interface returning summarized response."""
         if self.index is None:
             self.ensure_index_is_up_to_date()
-        query_engine = self.index.as_query_engine()
+        colbert_reranker = ColbertRerank()
+        query_engine = self.index.as_query_engine(node_postprocessors=[colbert_reranker])
         response = query_engine.query(query_text)
         return str(response)
 
