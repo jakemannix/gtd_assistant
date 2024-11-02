@@ -85,6 +85,51 @@ class SortedDocStore:
 
 
 class DurableSemanticMemory(BaseMemory):
+    """A durable memory implementation that combines semantic search with chronological retrieval.
+    
+    This memory system uses three components to store and retrieve chat history:
+    
+    1. vector_store (RedisVectorStore): 
+       - The underlying vector database that stores embeddings for semantic search
+       - Persists in Redis for durability
+    
+    2. vector_index (VectorStoreIndex):
+       - A semantic index built on top of the vector_store
+       - Used for retrieving relevant messages based on semantic similarity to a query
+       - Enables the get(query) method to find contextually relevant past conversations
+    
+    3. doc_store (SortedDocStore):
+       - A time-ordered store of messages using Redis' sorted sets
+       - Used for chronological retrieval of recent messages
+       - Enables the get_all() method to return the most recent conversations
+    
+    The memory system batches messages by user interaction. When batch_by_user_message=True:
+    - A user's message and all subsequent assistant messages are grouped together
+    - This ensures that when retrieving context, we get complete conversation segments
+    - Batches are stored as TextNodes with metadata containing the individual messages
+    
+    Usage:
+        memory = DurableSemanticMemory(
+            redis_client=redis_client,
+            embed_model=embed_model,
+            max_recent_memories=100,  # Number of recent messages to return into the prompt
+            max_memory_age=timedelta(days=7)  # Maximum age of messages to return
+        )
+        
+        # Store a new message
+        memory.put(ChatMessage(role="user", content="What's GTD?"))
+        
+        # Get semantically relevant past messages
+        relevant_history = memory.get("Tell me about GTD methodology")
+        
+        # Get recent message history
+        recent_messages = memory.get_all()
+    
+    Note:
+        The vector_store and doc_store both persist in Redis, making this memory system
+        durable across restarts. The vector_index is rebuilt from the vector_store
+        on initialization.
+    """
     vector_store: RedisVectorStore = Field(...)
     vector_index: VectorStoreIndex = Field(...)
     doc_store: SortedDocStore = Field(...)

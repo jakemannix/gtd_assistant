@@ -2,7 +2,7 @@
 venv/
 venv311/
 main.log
-persisted_index/
+persisted_index**/
 .idea/
 .vscode/
 *.egg-info/

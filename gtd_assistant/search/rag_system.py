@@ -1,6 +1,6 @@
 # gtd_assistant/app/search/rag_system.py
 
-from typing import Dict, Type
+from typing import Dict, Type, List, Union
 import os
 import logging
 import json
@@ -12,6 +12,7 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.openai import OpenAI
 from llama_index.llms.anthropic import Anthropic
 from llama_index.embeddings.cohere import CohereEmbedding
+from llama_index.core.schema import NodeWithScore
 
 from .obsidian_reader import ObsidianReader
 
@@ -27,16 +28,11 @@ EMBED_MODELS: Dict[str, Type] = {
     "embed-english-v3.0": CohereEmbedding
 }
 
-LLM_MODELS: Dict[str, Type] = {
-    "gpt-3.5-turbo": OpenAI,
-    "gpt-4o": OpenAI,
-    "claude-3.5-sonnet": Anthropic,
-    "claude-3-opus": Anthropic
-}
 
-
+# TODO: align better with how llama_index handles data + RAG.
 class RAGSystem:
-    def __init__(self, vault_path: str, persist_dir: str, embed_model: str = "text-embedding-3-small", 
+    def __init__(self, vault_path: str, persist_dir: str,
+                 embed_model: str = "text-embedding-3-small",
                  llm_model: str = "gpt-4o"):
         self.vault_path = vault_path
         self.embed_model = self.get_embed_model(embed_model)
@@ -126,11 +122,83 @@ class RAGSystem:
         self.index.storage_context.persist(persist_dir=self.persist_dir)
 
     def query(self, query_text: str) -> str:
+        """Standard query interface returning summarized response."""
         if self.index is None:
             self.ensure_index_is_up_to_date()
         query_engine = self.index.as_query_engine()
         response = query_engine.query(query_text)
         return str(response)
+
+    def retrieve_raw(self, query_text: str, top_k: int = 5) -> List[NodeWithScore]:
+        """Get raw retrieval results with similarity scores."""
+        if self.index is None:
+            self.ensure_index_is_up_to_date()
+        retriever = self.index.as_retriever(similarity_top_k=top_k)
+        return retriever.retrieve(query_text)
+
+    def debug_query(self, query_text: str, top_k: int = 5) -> Dict:
+        """
+        Get detailed debug information about vector search results.
+        
+        Args:
+            query_text (str): The query text
+            top_k (int): Number of top results to return
+            
+        Returns:
+            Dict containing:
+                - query information
+                - embedding details
+                - vector store info
+                - detailed results with scores and sources
+        """
+        nodes_with_scores = self.retrieve_raw(query_text, top_k)
+        query_embedding = self.embed_model.get_text_embedding(query_text)
+        
+        debug_info = {
+            "query": {
+                "text": query_text,
+                "embedding": query_embedding,
+            },
+            "system_info": {
+                "embedding_model": str(self.embed_model),
+                "vector_store_type": str(type(self.index._vector_store)),
+                "top_k": top_k
+            },
+            "results": []
+        }
+        
+        for node_with_score in nodes_with_scores:
+            node = node_with_score.node
+            debug_info["results"].append({
+                "score": node_with_score.score,
+                "text": node.text,
+                "source": node.metadata.get("source", "Unknown source"),
+                "metadata": node.metadata,
+                "node_id": node.node_id,
+                "embedding": getattr(node, "embedding", None)
+            })
+        
+        return debug_info
+
+    def inspect_node(self, node_id: str) -> Dict:
+        """
+        Get detailed information about a specific node by ID.
+        Useful for investigating specific results from debug_query.
+        """
+        if self.index is None:
+            self.ensure_index_is_up_to_date()
+            
+        try:
+            node = self.index.docstore.get_node(node_id)
+            return {
+                "node_id": node.node_id,
+                "text": node.text,
+                "metadata": node.metadata,
+                "embedding": getattr(node, "embedding", None),
+                "relationships": getattr(node, "relationships", {}),
+            }
+        except KeyError:
+            return {"error": f"Node {node_id} not found"}
 
     @staticmethod
     def get_embed_model(embed_model: str):
@@ -144,11 +212,22 @@ class RAGSystem:
 
     @staticmethod
     def get_llm(llm_model: str):
-        if llm_model not in LLM_MODELS:
-            raise ValueError(f"Unsupported LLM model: {llm_model}")
-
-        model_class = LLM_MODELS[llm_model]
-        return model_class(model=llm_model)
+        """
+        Get the appropriate LLM client based on model name pattern.
+        Args:
+            llm_model (str): Name of the model (e.g., "gpt-4-turbo", "claude-3-opus")
+        Returns:
+            BaseLLM: An instance of the appropriate LLM client
+        Raises:
+            ValueError: If the model name pattern isn't recognized
+        """
+        if llm_model.startswith("gpt-"):
+            return OpenAI(model=llm_model)
+        elif llm_model.startswith("claude-"):
+            return Anthropic(model=llm_model)
+        else:
+            # TODO: add more models, esp open source ones from Hugging Face
+            raise ValueError(f"Unsupported model pattern: {llm_model}. Must start with 'gpt-' or 'claude-'")
 
     def load_note_hashes(self):
         if os.path.exists(self.hash_file):

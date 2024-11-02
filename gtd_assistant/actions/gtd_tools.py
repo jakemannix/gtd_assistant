@@ -1,6 +1,7 @@
 # gtd_assistant/app/actions/gtd_tools.py
 
-from typing import List, Dict
+from typing import List, Dict, Callable, Any
+from inspect import signature
 from llama_index.core.tools import FunctionTool
 from llama_index.core.base.llms.types import ChatMessage
 from ..file_system.obsidian_interface import ObsidianVault
@@ -14,9 +15,7 @@ from pathlib import Path
 
 logger = logging.getLogger('gtd_assistant')
 
-# TODO: all actions reading / writing to the filesystem need to assume the caller is an LLM, who makes mistakes
-# thus we need to expect exceptions, and return an error message, possibly also listing the contents of the directory
-# above the path that failed, to help the LLM understand the file system layout and self correct.
+
 class GTDTools:
     def __init__(self, vault_path: str, embed_model: str, llm_model: str, persist_dir: str,
      memory: DurableSemanticMemory):
@@ -34,6 +33,11 @@ class GTDTools:
             query (str): The query to search for.
         Returns:
             List[ChatMessage]: A list of ChatMessage's that are relevant to the query.
+        
+        Example tool call:
+
+        Action: search_memory
+        Action Input: {"query": "What did we discuss about AI last week?"}
         """
         return self.memory.get(query)
 
@@ -43,19 +47,49 @@ class GTDTools:
         Returns:
             Dict[str, List[str]]: A dictionary with keys being the folder path and
             values being a list of all markdown files in that folder.
+        
+        Example tool call:
+
+        Action: get_folder_structure
+        Action Input: {}
         """
         logger.debug("Attempting to get current Obsidian vault folder structure")
         return self.vault.get_folder_structure()
 
-    def query(self, question: str) -> str:
+    def search_gtd_notes(self, question: str) -> List[Dict[str, Any]]:
         """
-        Query the RAG system with a question.
+        Query the GTD index system with a question.
         Args:
-            question (str): The question to ask the RAG system.
+            question (str): The question to ask the GTD system.
         Returns:
-            str: The answer from the RAG system.
+            List[Dict[str, Any]]: A list of search results, each containing:
+                - score: float, similarity score
+                - source: str, source file path
+                - text: str, content of the note
+                - metadata: Dict, any additional metadata
+        
+        Example tool calls:
+
+        if the user is asking "What LLM architecture variations do I have notes on?", you
+        could call this tool with the following input:
+
+        Action: search_gtd_notes
+        Action Input: {"question": "LLM architecture variations"}
+
+        if the user is asking "What's in my grocery list?", you could call this tool with
+        the following input:
+
+        Action: search_gtd_notes
+        Action Input: {"question": "grocery list"}
         """
-        return self.rag.query(question)
+        nodes = self.rag.retrieve_raw(question)
+        
+        return [{
+            'score': node.score,
+            'source': node.node.metadata.get('source', 'Unknown'),
+            'text': node.node.text,
+            'metadata': node.node.metadata
+        } for node in nodes]
 
     def list_notes(self, folder_path: str) -> List[str]:
         """
@@ -64,6 +98,11 @@ class GTDTools:
             folder_path (str): The path to the folder.
         Returns:
             List[str]: A list of note names and subfolders in the folder.
+        
+        Example tool call:
+
+        Action: list_notes
+        Action Input: {"folder_path": "GTD/Inbox"}
         """
         logger.debug(f"Attempting to list notes and folders in: {folder_path}")
         try:
@@ -81,6 +120,11 @@ class GTDTools:
             note_path (str): The path to the note.
         Returns:
             str: The content of the note or an error message with additional context.
+        
+        Example tool call:
+
+        Action: read_note
+        Action Input: {"note_path": "GTD/Next Actions/Emails/Referrals for Adil.md"}
         """
         try:
             return self.vault.read_note(note_path)
@@ -103,10 +147,34 @@ class GTDTools:
             note_path (str): The path where to write the note.
             content (str): The content of the note.
         Returns:
-            str: Confirmation message.
+            str: Confirmation message or error message with context.
+        
+        Example tool call:
+
+        Action: write_note
+        Action Input: {
+            "note_path": "GTD/Next Actions/Errands/20240510_1015_groceries.md",
+            "content": "Buy groceries: milk, bread, eggs, and cheese"
+        }
         """
-        self.vault.write_note(note_path, content)
-        return f"Note written to {note_path}"
+        try:
+            self.vault.write_note(note_path, content)
+            return f"Note written to {note_path}"
+        except Exception as e:
+            parent_dir = os.path.dirname(note_path)
+            try:
+                parent_contents = self.list_notes(parent_dir)
+            except:
+                parent_dir = os.path.dirname(parent_dir)
+                parent_contents = self.list_notes(parent_dir)
+            
+            error_message = (
+                f"Error writing note '{note_path}': {str(e)}\n\n"
+                f"Stack trace:\n{traceback.format_exc()}\n\n"
+                f"Contents of parent directory '{parent_dir}':\n{parent_contents}"
+            )
+            logger.error(error_message)
+            return error_message
 
     def move_note(self, source_path: str, dest_path: str) -> str:
         """
@@ -115,10 +183,39 @@ class GTDTools:
             source_path (str): The current path of the note.
             dest_path (str): The destination path for the note.
         Returns:
-            str: Confirmation message.
+            str: Confirmation message or error message with context.
+        
+        Example tool call:
+
+        Action: move_note
+        Action Input: {
+            "source_path": "GTD/Inbox/task.md",
+            "dest_path": "GTD/Next Actions/task.md"
+        }
         """
-        self.vault.move_note(source_path, dest_path)
-        return f"Note moved from {source_path} to {dest_path}"
+        try:
+            self.vault.move_note(source_path, dest_path)
+            return f"Note moved from {source_path} to {dest_path}"
+        except Exception as e:
+            source_parent = os.path.dirname(source_path)
+            dest_parent = os.path.dirname(dest_path)
+            try:
+                source_contents = self.list_notes(source_parent)
+                dest_contents = self.list_notes(dest_parent)
+            except:
+                source_parent = os.path.dirname(source_parent)
+                dest_parent = os.path.dirname(dest_parent)
+                source_contents = self.list_notes(source_parent)
+                dest_contents = self.list_notes(dest_parent)
+            
+            error_message = (
+                f"Error moving note from '{source_path}' to '{dest_path}': {str(e)}\n\n"
+                f"Stack trace:\n{traceback.format_exc()}\n\n"
+                f"Contents of source directory '{source_parent}':\n{source_contents}\n\n"
+                f"Contents of destination directory '{dest_parent}':\n{dest_contents}"
+            )
+            logger.error(error_message)
+            return error_message
 
     def fetch_links_from_note(self, source_path: str) -> str:
         """
@@ -137,6 +234,14 @@ class GTDTools:
             - If the source note is at 'Projects/AI/LLMs/MoD.md',
             - The linked pages will be stored in 'Projects/AI/LLMs/MoD_linked_pages/'.
             Each linked page will be saved as an HTML file, with the filename being '{md5 hash of the URL}.html'.
+        
+        Example tool call:
+
+        Action: fetch_links_from_note
+        Action Input: {"source_path": "Projects/AI/LLMs/MoD.md"}
+
+        Action: fetch_links_from_note
+        Action Input: {"source_path": "GTD/Inbox/20241023_1015_Today from Twitter.md"}
         """
         logger.debug(f"Attempting to fetch HTML content from links found in {source_path}")
         
@@ -156,13 +261,20 @@ class GTDTools:
 
     def get_tools(self):
         logger.debug("get_tools called")
+        #
+        # TODO: the following constructs the FunctionTool description string, we
+        # can override and inject few-shot examples. 
+        #    name = name or fn.__name__
+        #    docstring = fn.__doc__
+        #    description = description or f"{name}{signature(fn)}\n{docstring}"
+        #
         return [
-            FunctionTool.from_defaults(fn=self.get_folder_structure, name="get_folder_structure"),
-            FunctionTool.from_defaults(fn=self.query, name="query_rag"),
-            FunctionTool.from_defaults(fn=self.list_notes, name="list_notes"),
-            FunctionTool.from_defaults(fn=self.read_note, name="read_note"),
-            FunctionTool.from_defaults(fn=self.write_note, name="write_note"),
-            FunctionTool.from_defaults(fn=self.move_note, name="move_note"),
-            FunctionTool.from_defaults(fn=self.fetch_links_from_note, name="fetch_links_from_note"),
-            FunctionTool.from_defaults(fn=self.search_memory, name="search_memory"),
+            FunctionTool.from_defaults(fn=self.get_folder_structure),
+            FunctionTool.from_defaults(fn=self.search_gtd_notes),
+            FunctionTool.from_defaults(fn=self.list_notes),
+            FunctionTool.from_defaults(fn=self.read_note),
+            FunctionTool.from_defaults(fn=self.write_note),
+            FunctionTool.from_defaults(fn=self.move_note),
+            FunctionTool.from_defaults(fn=self.fetch_links_from_note),
+            FunctionTool.from_defaults(fn=self.search_memory),
         ]
