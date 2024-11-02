@@ -122,12 +122,17 @@ class RAGSystem:
         os.makedirs(self.persist_dir, exist_ok=True)
         self.index.storage_context.persist(persist_dir=self.persist_dir)
 
-    def query(self, query_text: str) -> str:
+    # TODO: wire in configurability of the reranking model.
+    def query(self, query_text: str, first_k: int = 50, top_k: int = 5) -> str:
         """Standard query interface returning summarized response."""
         if self.index is None:
             self.ensure_index_is_up_to_date()
-        colbert_reranker = ColbertRerank()
-        query_engine = self.index.as_query_engine(node_postprocessors=[colbert_reranker])
+        # TODO: Test this out.
+        colbert_reranker = ColbertRerank(top_n=top_k)
+        query_engine = self.index.as_query_engine(
+            similarity_top_k=first_k, 
+            node_postprocessors=[colbert_reranker]
+        )
         response = query_engine.query(query_text)
         return str(response)
 
@@ -137,13 +142,20 @@ class RAGSystem:
             self.ensure_index_is_up_to_date()
         retriever = self.index.as_retriever(similarity_top_k=top_k)
         return retriever.retrieve(query_text)
+    
+    def rerank(self, nodes: List[NodeWithScore], top_k: int = 5) -> List[NodeWithScore]:
+        """Rerank nodes using Colbert reranker."""
+        colbert_reranker = ColbertRerank(top_n=top_k)
+        post_processed_nodes = colbert_reranker.postprocess_nodes(nodes)
+        return post_processed_nodes
 
-    def debug_query(self, query_text: str, top_k: int = 5) -> Dict:
+    def debug_query(self, query_text: str, first_k: int = 50, top_k: int = 5) -> Dict:
         """
         Get detailed debug information about vector search results.
         
         Args:
             query_text (str): The query text
+            first_k (int): Number of results to retrieve before reranking
             top_k (int): Number of top results to return
             
         Returns:
@@ -151,10 +163,22 @@ class RAGSystem:
                 - query information
                 - embedding details
                 - vector store info
-                - detailed results with scores and sources
+                - detailed results with scores and sources, before and after reranking
         """
-        nodes_with_scores = self.retrieve_raw(query_text, top_k)
+        nodes_with_scores = self.retrieve_raw(query_text, first_k)
+        reranked_nodes = self.rerank(nodes_with_scores, top_k)
         query_embedding = self.embed_model.get_text_embedding(query_text)
+        
+        # Create lookup of all nodes by ID for easy reference
+        node_lookup = {}
+        for node_with_score in nodes_with_scores:
+            node = node_with_score.node
+            node_lookup[node.node_id] = {
+                "text": node.text,
+                "source": node.metadata.get("source", "Unknown source"), 
+                "metadata": node.metadata,
+                "embedding": getattr(node, "embedding", None)
+            }
         
         debug_info = {
             "query": {
@@ -164,22 +188,23 @@ class RAGSystem:
             "system_info": {
                 "embedding_model": str(self.embed_model),
                 "vector_store_type": str(type(self.index._vector_store)),
+                "first_k": first_k,
                 "top_k": top_k
             },
-            "results": []
+            "raw_results": [
+                {
+                    "node_id": n.node.node_id,
+                    "score": n.score
+                } for n in nodes_with_scores
+            ],
+            "reranked_results": [
+                {
+                    "node_id": n.node.node_id,
+                    "score": n.score
+                } for n in reranked_nodes
+            ],
+            "nodes": node_lookup
         }
-        
-        for node_with_score in nodes_with_scores:
-            node = node_with_score.node
-            debug_info["results"].append({
-                "score": node_with_score.score,
-                "text": node.text,
-                "source": node.metadata.get("source", "Unknown source"),
-                "metadata": node.metadata,
-                "node_id": node.node_id,
-                "embedding": getattr(node, "embedding", None)
-            })
-        
         return debug_info
 
     def inspect_node(self, node_id: str) -> Dict:
