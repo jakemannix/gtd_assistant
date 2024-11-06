@@ -16,6 +16,7 @@ class ObsidianVault:
             raise ValueError(f"Vault path does not exist: {vault_path}")
         logger.debug(f"Initialized ObsidianVault with path: {self.vault_path}")
 
+    # TODO: add support for non-markdown files
     def get_folder_structure(self) -> Dict[str, List[str]]:
         structure = {}
         for root, dirs, files in os.walk(self.vault_path):

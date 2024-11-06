@@ -8,6 +8,7 @@ from ..file_system.obsidian_interface import ObsidianVault
 from ..search.rag_system import RAGSystem
 from ..analysis.spider import Spider
 from ..agent.memory import DurableSemanticMemory
+from ..config import Config
 import logging
 import os
 import traceback
@@ -17,11 +18,9 @@ logger = logging.getLogger('gtd_assistant')
 
 
 class GTDTools:
-    def __init__(self, vault_path: str, embed_model: str, llm_model: str, persist_dir: str,
-     memory: DurableSemanticMemory):
-        self.vault = ObsidianVault(vault_path)
-        self.rag = RAGSystem(vault_path=vault_path, persist_dir=persist_dir,
-                             embed_model=embed_model, llm_model=llm_model)
+    def __init__(self, config: Config, memory: DurableSemanticMemory):
+        self.vault = ObsidianVault(config.vault_path)
+        self.rag = RAGSystem(config=config)
         self.spider = Spider()
         self.memory = memory
         # self.rag.ensure_index_is_up_to_date()
@@ -46,8 +45,11 @@ class GTDTools:
         Check the current contents of the Obsidian vault.
         Returns:
             Dict[str, List[str]]: A dictionary with keys being the folder path and
-            values being a list of all markdown files in that folder.
+            values being a list of the filenames of all markdown files in that folder.
         
+        Generally useful to get a high-level view of the entire set of notes, by note title
+        and folder structure.
+
         Example tool call:
 
         Action: get_folder_structure
@@ -68,22 +70,30 @@ class GTDTools:
                 - text: str, content of the note
                 - metadata: Dict, any additional metadata
         
+        Note: information about the names of notes and their location in the filesystem are
+        best retrieved using the get_folder_structure and list_notes tools.  Searching based
+        on the note content is best done using this tool.
+
         Example tool calls:
 
-        if the user is asking "What LLM architecture variations do I have notes on?", you
+        if the user is asking "I've been trying to remember what kinds of LLMs I've been researching. 
+        What LLM architecture variations do I have notes on?", you
         could call this tool with the following input:
 
         Action: search_gtd_notes
         Action Input: {"question": "LLM architecture variations"}
 
-        if the user is asking "What's in my grocery list?", you could call this tool with
+        if the user is asking "I'm going shopping soon.What's in my grocery list?", you could call this tool with
         the following input:
 
         Action: search_gtd_notes
         Action Input: {"question": "grocery list"}
         """
-        nodes = self.rag.retrieve_raw(question)
-        
+        # nodes = self.rag.retrieve_raw(question)
+        # reranked_nodes = self.rag.rerank(query_text=question, nodes=nodes)
+
+        nodes = self.rag.retrieve_and_rerank(question) # TODO: parametrize via the top_k and first_k parameters
+
         return [{
             'score': node.score,
             'source': node.node.metadata.get('source', 'Unknown'),
@@ -113,6 +123,7 @@ class GTDTools:
             logger.error(f"Error listing notes and folders: {str(e)}")
             return []
 
+    # TODO: allow a list of notes to be read at once, to enable the LLM to batch this together
     def read_note(self, note_path: str) -> str:
         """
         Read the content of a specific note.
@@ -261,13 +272,6 @@ class GTDTools:
 
     def get_tools(self):
         logger.debug("get_tools called")
-        #
-        # TODO: the following constructs the FunctionTool description string, we
-        # can override and inject few-shot examples. 
-        #    name = name or fn.__name__
-        #    docstring = fn.__doc__
-        #    description = description or f"{name}{signature(fn)}\n{docstring}"
-        #
         return [
             FunctionTool.from_defaults(fn=self.get_folder_structure),
             FunctionTool.from_defaults(fn=self.search_gtd_notes),

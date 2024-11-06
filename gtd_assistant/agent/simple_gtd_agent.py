@@ -19,6 +19,7 @@ from ..actions.gtd_tools import GTDTools
 from ..search.rag_system import RAGSystem
 from .memory import DurableSemanticMemory
 from .constants import GTD_PROMPT
+from ..config import Config
 
 
 logger = logging.getLogger('gtd_assistant')
@@ -28,21 +29,17 @@ class SimpleGTDAgent:
         "gpt-4o": OpenAIMultiModal,
         "claude-3.5-sonnet": AnthropicMultiModal,
     }
-    def __init__(self, vault_path: str, persist_dir: str, redis_url: str,
-                 model: str = "gpt-4o", embed_model: str = "local",
-                 debug: bool = False):
-        if model not in self.MODEL_CLIENTS:
-            raise ValueError(f"Unsupported model: {model}")
-        logger.info(f"Initializing SimpleGTDAgent with model: {model}, embed_model: {embed_model}")
-        self.vault_path = vault_path
-        self.model = model        
-        self.debug = debug
-        self.embed_model_name = embed_model
-        self.mm_llm = self.MODEL_CLIENTS[model](model=model, max_new_tokens=1000)
-        self.memory = self.setup_memory(redis_url)
-        self.tools = GTDTools(vault_path=vault_path, embed_model=self.embed_model_name, 
-                              llm_model=self.model, persist_dir=persist_dir,
-                             memory=self.memory).get_tools()
+    def __init__(self, config: Config):
+        self.config = config
+        if config.model not in self.MODEL_CLIENTS:
+            raise ValueError(f"Unsupported model: {config.model}")
+        logger.info(f"Initializing SimpleGTDAgent with model: {config.model}, embed_model: {config.embed_model}")
+        self.model = config.model        
+        self.debug = config.debug
+        self.embed_model_name = config.embed_model
+        self.mm_llm = self.MODEL_CLIENTS[config.model](model=config.model, max_new_tokens=1000)
+        self.memory = self.setup_memory(config.redis_url)
+        self.tools = GTDTools(config=config, memory=self.memory).get_tools()
         self.agent = self.setup_agent()
 
     def setup_memory(self, redis_url: str):
