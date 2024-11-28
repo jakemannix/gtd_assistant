@@ -3,6 +3,7 @@ venv/
 venv311/
 venv*/
 main.log
+build/*
 persisted_index**/
 .idea/
 .vscode/
